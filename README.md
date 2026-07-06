@@ -1,14 +1,53 @@
 # codex-guard
 
-A tiny, stdlib-only **PreToolUse guard for the OpenAI Codex CLI** — the sibling of
-[agent-guard](https://github.com/kkrlstrm/agent-guard) for Claude Code. It screens
-every tool call *before it runs* and can **nudge**, **deny**, or **hard-block** it,
-with a hash-chained tamper-evident audit trail.
+**Recoverability-first runtime controls for the OpenAI Codex CLI.**
 
-## It works because Codex fires PreToolUse — verified, not assumed
+codex-guard sits between Codex and the tools it's about to run. Every `Bash` command
+and `apply_patch` edit passes through a `PreToolUse` hook first, where codex-guard can
+do one of four things:
 
-On Codex `0.140.0-alpha.2` (VS Code extension), a `~/.codex/hooks.json` `PreToolUse`
-command hook was measured to:
+- **monitor** the call for audit only,
+- **nudge** Codex with additional context and let the tool run,
+- **deny** the call with a recoverable permission decision, or
+- **block** the call with `exit 2` before it executes.
+
+The goal isn't to sandbox Codex. It's to make agentic coding more recoverable — fail
+open by default, block only irreversible damage, and keep a tamper-evident audit trail
+of every verdict. It's the sibling of
+[agent-guard](https://github.com/kkrlstrm/agent-guard) for Claude Code; the engine ports
+unchanged.
+
+## Why this exists
+
+Codex now executes real commands, patches files, touches secrets, mutates databases, and
+breaks local and dev environments. Static prompts aren't enough for that — you want
+runtime controls that sit between the model and the tool call.
+
+Most agent guardrails get written before you know what the agent will actually do.
+codex-guard is meant to be *grown from real telemetry* instead: watch what Codex actually
+tries, find the recurring failure patterns, start them as monitor-only rules, promote the
+useful ones into nudges, and reserve hard blocks for irreversible operations. That's the
+wedge — pair it with [codex-logger](https://github.com/kkrlstrm/codex-logger) and you have
+the enforcement half of a Codex observability loop:
+
+> codex-logger shows you what Codex actually does. codex-guard turns what you learn into
+> runtime controls.
+
+## How it works
+
+A `~/.codex/hooks.json` `PreToolUse` command hook routes each tool call through
+`pretooluse-guard.py`, which matches it against your rulesets and emits one of the four
+actions above. In practice that means Codex can learn from the mistakes your sessions
+actually make: bare `psql` calls that fail, risky `curl | sh` installs, force-pushes to
+protected branches, edits to secret files, and SQL mutations from a read-only workflow.
+
+Absolute invariant: **a guard bug must never wedge a session.** Any unexpected error falls
+open (`exit 0`).
+
+<details>
+<summary><b>It works because Codex fires PreToolUse — verified, not assumed</b></summary>
+
+On Codex `0.140.0-alpha.2` (VS Code extension), a `PreToolUse` command hook was measured to:
 
 - fire for **`Bash`** (`tool_input.command` = the command) **and `apply_patch`**
   (`tool_input.command` = the patch) — not shell-only;
@@ -18,22 +57,40 @@ command hook was measured to:
   `{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": …}}`;
 - inject a non-blocking **`additionalContext`** nudge;
 
-and the model **gracefully continued** after a block. Those are the exact three
-mechanisms this guard emits — the same contract agent-guard uses on Claude Code,
-so the engine ports unchanged.
+and the model **gracefully continued** after a block. Those are the exact mechanisms this
+guard emits — the same contract agent-guard uses on Claude Code.
+</details>
 
-## Two biases, one engine
+## The telemetry loop with codex-logger
 
-- **fail-OPEN nudges** (`rules/starter.rules.json`) — for the main session. Rules
-  that would fail anyway become non-blocking reminders; only a couple of
-  irreversible patterns (`rm -rf /`) hard-block.
-- **hard-BLOCK backstop** (`rules/readonly-db.rules.json`) — a read-only-DB
-  firewall that blocks detected SQL mutations with `exit 2`. A backstop, not a
-  true fail-closed boundary: the hook itself falls open on any guard error, so the
-  durable guarantee is a **SELECT-only DB role**. See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
+[codex-logger](https://github.com/kkrlstrm/codex-logger) records every Codex tool call
+(with exit codes) from the rollout files. `derive_rules.py` reads its DB, finds commands
+that fail repeatedly, and proposes log-only `monitor` rules for you to review before you
+promote any of them:
 
-Absolute invariant: **a guard bug must never wedge a session** — any unexpected
-error falls open (`exit 0`).
+```bash
+python3 bin/derive_rules.py --db ~/.codex-logger/codex.db --days 14 --min-count 3
+```
+
+Log real behavior → find repeated failures → derive candidate rules → review → promote the
+useful ones into nudges or blocks. Rules earn their way up the ladder.
+
+## Default safety posture
+
+Two biases, one engine:
+
+- **Main-session mode — fail-open nudges** (`rules/starter.rules.json`). Help Codex
+  self-correct without interrupting flow. Rules that would fail anyway become non-blocking
+  reminders (`curl | sh`, protected-branch force-pushes, inline secrets, bare `psql`,
+  secret-file patches); a couple of irreversible patterns like `rm -rf /` hard-block.
+- **Backstop mode — hard blocks** (`rules/readonly-db.rules.json`). A read-only-DB firewall
+  that blocks detected SQL mutations (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`,
+  `CREATE`, `GRANT`, `REVOKE`, `COPY FROM`, `VACUUM`, stored-procedure calls) with `exit 2`.
+
+The philosophy: **use nudges where the model can recover; use blocks where the action
+violates the role.** The backstop is a backstop, not a true fail-closed boundary — the hook
+itself falls open on any guard error, so the durable guarantee for a read-only workflow is a
+`SELECT`-only DB role. See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
 ## Install
 
@@ -43,15 +100,15 @@ python3 install.py --dry-run       # preview the hooks.json it would write
 python3 install.py --uninstall     # remove just codex-guard's entry
 ```
 
-Then **start a new Codex session** so the hook loads. Codex uses **trust-on-first-use**
-for hooks (it records a `trusted_hash` in `config.toml`), so it may prompt you to
-trust codex-guard once. Keep `pretooluse-guard.py` stable and put churn in the rules
-JSON (which isn't hashed) to avoid re-prompts.
+Then **start a new Codex session** so the hook loads. Codex uses trust-on-first-use for
+hooks (it records a `trusted_hash` in `config.toml`), so it may prompt you to trust
+codex-guard once. Keep `pretooluse-guard.py` stable and put churn in the rules JSON (which
+isn't hashed) to avoid re-prompts.
 
 ## Rules
 
-A rule is JSON — a glob on `tool_name`, regexes on a `tool_input` field, an action,
-and a message:
+A rule is JSON — a glob on `tool_name`, regexes on a `tool_input` field, an action, and a
+message:
 
 ```json
 {
@@ -65,8 +122,8 @@ and a message:
 ```
 
 Actions: `nudge` (additionalContext, tool runs) · `deny` (permissionDecision deny) ·
-`block` (exit 2) · `monitor` (log-only). Point `$CODEX_GUARD_RULES` at your own file
-to override the starter set.
+`block` (exit 2) · `monitor` (log-only). Point `$CODEX_GUARD_RULES` at your own file to
+override the starter set.
 
 Validate any ruleset (runs each rule's `examples` as a mini-spec):
 
@@ -77,22 +134,12 @@ python3 bin/check_rules.py rules/starter.rules.json rules/readonly-db.rules.json
 ## Audit log
 
 Every verdict is appended to a hash-chained JSONL at `~/.codex-guard/audit.jsonl`
-(override with `$CODEX_GUARD_AUDIT`). Secrets are never stored verbatim — a SHA-256
-plus a redacted preview.
+(override with `$CODEX_GUARD_AUDIT`). Secrets are never stored verbatim — a SHA-256 plus a
+redacted preview.
 
 ```bash
 python3 -m guard.audit tail       # last 20 verdicts
 python3 -m guard.audit verify     # prove the chain wasn't altered
-```
-
-## Grow rules from your own telemetry (with codex-logger)
-
-[codex-logger](https://github.com/kkrlstrm/codex-logger) records every Codex tool
-call (with exit codes) from the rollout files. `derive_rules.py` reads its DB, finds
-commands that fail repeatedly, and proposes log-only `monitor` rules to review:
-
-```bash
-python3 bin/derive_rules.py --db ~/.codex-logger/codex.db --days 14 --min-count 3
 ```
 
 ## Env toggles
@@ -104,19 +151,21 @@ python3 bin/derive_rules.py --db ~/.codex-logger/codex.db --days 14 --min-count 
 | `CODEX_GUARD_DRYRUN=1` | evaluate + audit, but never block/nudge (observe-only rollout) |
 | `CODEX_GUARD_NUDGE_AS_BLOCK=1` | promote every nudge to a hard block |
 
+## Threat model
+
+codex-guard reduces *preventable* damage in Codex sessions; it doesn't secure them. It
+catches obvious destructive `Bash` (`rm -rf /`, `curl | sh`, force-push, inline secrets,
+bare `psql`), guards `apply_patch` writes to secret files, and hard-blocks DB mutations for
+a read-only workflow. It does **not** stop obfuscated commands, prompt injection, a
+determined agent, or a locally-compromised machine, and it falls open on its own errors by
+design. It's a recoverability-first seatbelt, not a sandbox. Full model in
+[docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
+
 ## Tests
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
-
-## What it does and doesn't protect
-
-It catches obvious destructive **Bash** (rm -rf /, curl|sh, force-push, inline
-secrets, bare psql), guards **apply_patch** writes to secret files, and hard-blocks
-**DB mutations** for a read-only sub-agent. It does **not** stop obfuscated commands,
-prompt injection, or a locally-compromised machine. It's a recoverability-first
-seatbelt, not a sandbox. See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
 ## License
 
