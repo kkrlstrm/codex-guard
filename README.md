@@ -1,5 +1,8 @@
 # codex-guard
 
+<!-- portfolio-status -->
+**Status:** Production-used — I run this against my own live agent workflows. · **Layer:** Execution controls · **[Portfolio map ›](https://github.com/kkrlstrm)**
+
 **Recoverability-first runtime controls for the OpenAI Codex CLI.**
 
 codex-guard sits between Codex and the tools it's about to run. Every `Bash` command
@@ -170,3 +173,16 @@ python3 -m unittest discover -s tests -v
 ## License
 
 AGPL-3.0-or-later. See [LICENSE](LICENSE).
+
+---
+
+<!-- portfolio-footer -->
+## Where this fits
+
+Part of a portfolio of **governed, AI-native GTM systems** — reference implementations and reusable patterns extracted from a private production stack. In that system this is the recovery-first control surface for the Codex CLI.
+
+**Full portfolio map → [github.com/kkrlstrm](https://github.com/kkrlstrm)**
+
+Works with:
+- [codex-logger](https://github.com/kkrlstrm/codex-logger) — supplies the telemetry
+- [agent-guard](https://github.com/kkrlstrm/agent-guard) — the Claude Code sibling; the engine ports unchanged
