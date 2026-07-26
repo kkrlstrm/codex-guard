@@ -45,6 +45,16 @@ def main(argv=None):
     conn = sqlite3.connect(a.db)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
+        # Command-shaped tools ONLY, deliberately. codex-logger captures every tool
+        # (apply_patch, update_plan, MCP, …) because it tails rollout files rather than
+        # hooks, but this deriver produces command-PATTERN rules — it clusters on the
+        # command string, which the others don't have.
+        #
+        # Do not broaden this to all tools without adding an exclusion set first. Read-
+        # only/context tools fail constantly as ordinary behaviour (a missing file is the
+        # agent checking whether it exists), clear any threshold, and would put the same
+        # junk candidate in front of the reviewer every run. agent-guard hit exactly that
+        # and now excludes them by default — see its docs/TELEMETRY.md.
         """SELECT arguments FROM tool_calls
            WHERE status='failure' AND tool_name IN ('exec_command','Bash')
              AND ts >= datetime('now', ?)""",
