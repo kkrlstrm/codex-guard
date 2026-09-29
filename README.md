@@ -1,14 +1,14 @@
 # codex-guard
 
 <!-- portfolio-status -->
-**Status:** Production-used — I run this against my own live agent workflows. · **Layer:** Execution controls · **[Portfolio map ›](https://github.com/kkrlstrm)**
+**Status:** Production-used — I run this against my own live agent workflows. · **Layer:** Policy and guardrails · **[Portfolio map ›](https://github.com/kkrlstrm)**
 
 > **Now part of [callusguard](https://github.com/kkrlstrm/callusguard).**
 > codex-guard is the Codex half of the `guard` stage in a five-stage loop —
 > `record → derive → guard → verify → prune`. callusguard adds rule derivation from your own
 > telemetry, scope verification, and pruning of rules that have stopped firing, and ships all
 > five stages for Claude Code as well as Codex, as one install. This repo stays up and works;
-> callusguard is where the loop closes.
+> callusguard is the maintained guardrail package; the wider learning loop, which also proposes skills, sub-agents and routes and measures each change against a control, continues in [runtune](https://github.com/kkrlstrm/runtune).
 
 **Recoverability-first runtime controls for the OpenAI Codex CLI.**
 
